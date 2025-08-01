@@ -1,8 +1,10 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>群組匿名投票</title>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -11,76 +13,96 @@
       text-align: center;
     }
     button {
-      font-size: 20px;
+      font-size: 18px;
       margin: 10px;
       padding: 10px 20px;
     }
     #result {
       margin-top: 30px;
       font-size: 18px;
-      display: none;
     }
   </style>
 </head>
 <body>
   <h1>群組匿名投票</h1>
   <p>請選擇你的投票意見：</p>
-  <button onclick="vote('同意')">✅ 同意</button>
-  <button onclick="vote('不同意')">❌ 不同意</button>
+  <button onclick="vote('agree')">✅ 同意</button>
+  <button onclick="vote('disagree')">❌ 不同意</button>
+  <br>
+  <button onclick="resetVotes()">🔄 重設投票</button>
 
   <div id="message"></div>
   <div id="result"></div>
 
   <script>
-    let votes = JSON.parse(localStorage.getItem("votes") || "[]");
-    let systemVoted = localStorage.getItem("systemVoted") === "true";
+    const firebaseConfig = {
+      apiKey: "AIzaSyBFwMJ9ZQvfa8CUiqq2LP4ISgfsRUpFgho",
+      authDomain: "vote-system-9cf4b.firebaseapp.com",
+      projectId: "vote-system-9cf4b",
+      storageBucket: "vote-system-9cf4b.appspot.com",
+      messagingSenderId: "709616738688",
+      appId: "1:709616738688:web:d61484db6e99d857bd6165",
+      measurementId: "G-BRD2P64K9Z"
+    };
 
-    function vote(choice) {
-      votes.push(choice);
-      localStorage.setItem("votes", JSON.stringify(votes));
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-      // 系統隨機投票（只做一次）
-      if (!systemVoted) {
-        const options = ["同意", "不同意"];
-        const randomVote = options[Math.floor(Math.random() * options.length)];
-        votes.push(randomVote);
-        localStorage.setItem("votes", JSON.stringify(votes));
-        localStorage.setItem("systemVoted", "true");
-        localStorage.setItem("systemVoteValue", randomVote);
+    // 投票功能
+    function vote(option) {
+      if (localStorage.getItem("hasVoted") === "true") {
+        document.getElementById("message").innerText = "⚠️ 你已經投過票了！";
+        return;
       }
 
-      showMessage(`✅ 你已投票：${choice}`);
-      checkVotes();
+      const docRef = db.collection("votes").doc(option);
+      db.runTransaction(async (transaction) => {
+        const doc = await transaction.get(docRef);
+        const current = doc.exists ? doc.data().count || 0 : 0;
+        transaction.set(docRef, { count: current + 1 });
+      }).then(() => {
+        localStorage.setItem("hasVoted", "true");
+        localStorage.setItem("myVote", option);
+        document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
+      });
     }
 
-    function checkVotes() {
-      if (votes.length >= 5) {
-        showResult();
-      } else {
-        showMessage(`已收到 ${votes.length} 票，尚需 ${5 - votes.length} 人投票`);
-      }
-    }
+    // 監聽投票變動
+    db.collection("votes").onSnapshot(snapshot => {
+      let agree = 0;
+      let disagree = 0;
 
-    function showMessage(msg) {
-      document.getElementById("message").innerText = msg;
-    }
-
-    function showResult() {
-      const agree = votes.filter(v => v === "同意").length;
-      const disagree = votes.filter(v => v === "不同意").length;
-      const systemVote = localStorage.getItem("systemVoteValue");
+      snapshot.forEach(doc => {
+        if (doc.id === "agree") agree = doc.data().count || 0;
+        if (doc.id === "disagree") disagree = doc.data().count || 0;
+      });
 
       document.getElementById("result").innerHTML = `
         <h2>📊 投票結果</h2>
         <p>✅ 同意：${agree} 票</p>
         <p>❌ 不同意：${disagree} 票</p>
-        <p>🧠 系統隨機投票為：<strong>${systemVote}</strong></p>
       `;
-      document.getElementById("result").style.display = "block";
-    }
+    });
 
-    // 頁面載入時檢查是否已達票數
-    window.onload = checkVotes;
+    // 重設投票（主持人專用）
+    function resetVotes() {
+      const password = prompt("輸入主持人密碼以重設投票：");
+      if (password !== "1234") {
+        alert("❌ 密碼錯誤，無法重設！");
+        return;
+      }
+
+      const agreeRef = db.collection("votes").doc("agree");
+      const disagreeRef = db.collection("votes").doc("disagree");
+
+      agreeRef.set({ count: 0 });
+      disagreeRef.set({ count: 0 });
+
+      localStorage.removeItem("hasVoted");
+      localStorage.removeItem("myVote");
+
+      document.getElementById("message").innerText = "🔄 投票已重設，歡迎再次投票！";
+    }
   </script>
 </body>
 </html>
