@@ -9,7 +9,7 @@
     body {
       font-family: Arial, sans-serif;
       padding: 20px;
-      background-color: #f9f9f9;
+      background-color: #fff;
       text-align: center;
     }
     button {
@@ -17,20 +17,23 @@
       margin: 10px;
       padding: 10px 20px;
     }
-    input, textarea {
-      padding: 10px;
+    textarea {
       width: 80%;
       max-width: 400px;
       margin-top: 10px;
+      padding: 10px;
     }
-    #result, #voter-count, #comments {
-      margin-top: 30px;
-      font-size: 18px;
+    #comments, #result, #voter-count {
+      margin-top: 20px;
     }
     .comment {
-      border-bottom: 1px solid #ccc;
-      padding: 5px;
-      margin: 5px;
+      margin-top: 10px;
+      padding: 10px;
+      border-bottom: 1px solid #ddd;
+      text-align: left;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
     }
   </style>
 </head>
@@ -43,14 +46,12 @@
   <button onclick="resetVotes()">🔄 重設投票</button>
 
   <div id="message"></div>
-  <div id="voter-count">👥 已投票人數：0 人</div>
+  <div id="voter-count">👥 已投票人數：0</div>
   <div id="result"></div>
 
-  <hr />
-  <h2>💬 匿名留言</h2>
-  <textarea id="commentInput" rows="3" placeholder="輸入你的意見..."></textarea><br />
+  <h2>💬 匿名留言區</h2>
+  <textarea id="commentInput" rows="3" placeholder="寫下你的想法..."></textarea><br>
   <button onclick="submitComment()">送出留言</button>
-
   <div id="comments"></div>
 
   <script>
@@ -60,110 +61,118 @@
       projectId: "vote-system-9cf4b",
       storageBucket: "vote-system-9cf4b.appspot.com",
       messagingSenderId: "709616738688",
-      appId: "1:709616738688:web:d61484db6e99d857bd6165",
-      measurementId: "G-BRD2P64K9Z"
+      appId: "1:709616738688:web:d61484db6e99d857bd6165"
     };
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    function vote(option) {
+    // 投票功能
+    async function vote(option) {
       if (localStorage.getItem("hasVoted") === "true") {
         document.getElementById("message").innerText = "⚠️ 你已經投過票了！";
         return;
       }
 
+      // 增加投票數
       const docRef = db.collection("votes").doc(option);
-      db.runTransaction(async (transaction) => {
-        const doc = await transaction.get(docRef);
-        const current = doc.exists ? doc.data().count || 0 : 0;
-        transaction.set(docRef, { count: current + 1 });
-      }).then(() => {
-        // 投票成功，記錄 voter
-        db.collection("voters").add({
-          timestamp: new Date()
-        });
-        localStorage.setItem("hasVoted", "true");
-        localStorage.setItem("myVote", option);
-        document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
-      });
+      const doc = await docRef.get();
+      const count = doc.exists ? doc.data().count || 0 : 0;
+      await docRef.set({ count: count + 1 });
+
+      // 增加投票者數量
+      await db.collection("voters").add({ timestamp: firebase.firestore.FieldValue.serverTimestamp() });
+
+      // 系統隨機投票（只做一次）
+      const systemVoted = localStorage.getItem("systemVoted");
+      if (!systemVoted) {
+        const random = Math.random() < 0.5 ? "agree" : "disagree";
+        const sysRef = db.collection("votes").doc(random);
+        const sysDoc = await sysRef.get();
+        const sysCount = sysDoc.exists ? sysDoc.data().count || 0 : 0;
+        await sysRef.set({ count: sysCount + 1 });
+        localStorage.setItem("systemVoted", "true");
+        localStorage.setItem("systemVoteValue", random);
+      }
+
+      localStorage.setItem("hasVoted", "true");
+      document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
+
+      // 檢查是否已到達5票（4人+系統）
+      const snapshot = await db.collection("voters").get();
+      if (snapshot.size >= 4) {
+        showFinalResult();
+      } else {
+        document.getElementById("result").innerHTML = `<p>📩 已收到 ${snapshot.size} 票，尚需 ${4 - snapshot.size} 票</p>`;
+      }
     }
 
-    // 實時監聽投票數
-    db.collection("votes").onSnapshot(snapshot => {
-      let agree = 0;
-      let disagree = 0;
-
-      snapshot.forEach(doc => {
-        if (doc.id === "agree") agree = doc.data().count || 0;
-        if (doc.id === "disagree") disagree = doc.data().count || 0;
-      });
+    // 顯示最終結果
+    async function showFinalResult() {
+      const agreeDoc = await db.collection("votes").doc("agree").get();
+      const disagreeDoc = await db.collection("votes").doc("disagree").get();
+      const agree = agreeDoc.exists ? agreeDoc.data().count || 0 : 0;
+      const disagree = disagreeDoc.exists ? disagreeDoc.data().count || 0 : 0;
+      const systemVote = localStorage.getItem("systemVoteValue");
 
       document.getElementById("result").innerHTML = `
         <h2>📊 投票結果</h2>
         <p>✅ 同意：${agree} 票</p>
         <p>❌ 不同意：${disagree} 票</p>
+        <p>🧠 系統隨機投票為：<strong>${systemVote === 'agree' ? '同意' : '不同意'}</strong></p>
       `;
-    });
+    }
 
-    // 實時監聽已投票人數
+    // 更新投票人數（即時）
     db.collection("voters").onSnapshot(snapshot => {
-      document.getElementById("voter-count").innerText = `👥 已投票人數：${snapshot.size} 人`;
+      document.getElementById("voter-count").innerText = `👥 已投票人數：${snapshot.size}`;
     });
 
-    // 送出匿名留言
-    function submitComment() {
-      const comment = document.getElementById("commentInput").value.trim();
-      if (comment === "") return alert("請輸入留言");
+    function resetVotes() {
+      const pw = prompt("輸入密碼：");
+      if (pw !== "1234") return alert("密碼錯誤");
+      db.collection("votes").doc("agree").set({ count: 0 });
+      db.collection("votes").doc("disagree").set({ count: 0 });
+      clearCollection("voters");
+      clearCollection("comments");
+      localStorage.removeItem("hasVoted");
+      localStorage.removeItem("systemVoted");
+      localStorage.removeItem("systemVoteValue");
+      document.getElementById("message").innerText = "🔄 投票已重設，歡迎再投票！";
+      document.getElementById("result").innerHTML = "";
+    }
 
+    function clearCollection(name) {
+      db.collection(name).get().then(snapshot => {
+        const batch = db.batch();
+        snapshot.forEach(doc => batch.delete(doc.ref));
+        batch.commit();
+      });
+    }
+
+    // 留言功能
+    function submitComment() {
+      const text = document.getElementById("commentInput").value.trim();
+      if (!text) return;
       db.collection("comments").add({
-        text: comment,
-        timestamp: new Date()
+        text,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
       }).then(() => {
         document.getElementById("commentInput").value = "";
       });
     }
 
-    // 顯示留言區
     db.collection("comments").orderBy("timestamp", "desc").onSnapshot(snapshot => {
-      const commentsDiv = document.getElementById("comments");
-      commentsDiv.innerHTML = "";
+      const div = document.getElementById("comments");
+      div.innerHTML = "";
       snapshot.forEach(doc => {
-        const data = doc.data();
-        const time = data.timestamp?.toDate().toLocaleString() || "";
-        commentsDiv.innerHTML += `<div class="comment">📝 ${data.text} <br><small>${time}</small></div>`;
+        const d = doc.data();
+        const commentEl = document.createElement("div");
+        commentEl.className = "comment";
+        commentEl.innerHTML = `📝 ${d.text}`;
+        div.appendChild(commentEl);
       });
     });
-
-    // 重設投票
-    function resetVotes() {
-      const password = prompt("輸入主持人密碼以重設投票：");
-      if (password !== "1234") {
-        alert("❌ 密碼錯誤，無法重設！");
-        return;
-      }
-
-      // 歸零票數
-      db.collection("votes").doc("agree").set({ count: 0 });
-      db.collection("votes").doc("disagree").set({ count: 0 });
-
-      // 刪除投票紀錄 & 留言
-      deleteCollection("voters");
-      deleteCollection("comments");
-
-      localStorage.removeItem("hasVoted");
-      localStorage.removeItem("myVote");
-
-      document.getElementById("message").innerText = "🔄 投票已重設，歡迎再次投票！";
-    }
-
-    // 刪除整個集合內容
-    async function deleteCollection(name) {
-      const snapshot = await db.collection(name).get();
-      const batch = db.batch();
-      snapshot.forEach(doc => batch.delete(doc.ref));
-      return batch.commit();
-    }
   </script>
 </body>
 </html>
