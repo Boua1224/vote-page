@@ -39,7 +39,9 @@
   <button onclick="vote('agree')">✅ 同意</button>
   <button onclick="vote('disagree')">❌ 不同意</button>
   <br>
-  <button onclick="resetVotes()">🔄 重設投票</button>
+  <button onclick="resetVotes()">🔄 重設投票（管理員）</button>
+  <button onclick="resetLocal()">🧹 清除本裝置投票紀錄</button>
+  <p style="color: gray; font-size: 14px;">（如果已投票但系統已重設，請點上方按鈕）</p>
 
   <div id="message"></div>
   <div id="voter-count">👥 已投票人數：0</div>
@@ -63,64 +65,44 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    async function vote(option) {
+    function vote(option) {
       if (localStorage.getItem("hasVoted") === "true") {
         document.getElementById("message").innerText = "⚠️ 你已經投過票了！";
         return;
       }
 
-      const docRef = db.collection("votes").doc(option);
-      const doc = await docRef.get();
-      const count = doc.exists ? doc.data().count || 0 : 0;
-      await docRef.set({ count: count + 1 });
-
-      await db.collection("voters").add({ timestamp: firebase.firestore.FieldValue.serverTimestamp() });
-      localStorage.setItem("hasVoted", "true");
-      document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
-
-      // 加入系統投票（只做一次）
-      const systemRef = db.collection("systemVote").doc("vote");
-      const systemDoc = await systemRef.get();
-      if (!systemDoc.exists) {
-        const random = Math.random() < 0.5 ? "agree" : "disagree";
-        const sysVoteRef = db.collection("votes").doc(random);
-        const sysVoteDoc = await sysVoteRef.get();
-        const sysCount = sysVoteDoc.exists ? sysVoteDoc.data().count || 0 : 0;
-        await sysVoteRef.set({ count: sysCount + 1 });
-        await systemRef.set({ value: random, timestamp: firebase.firestore.FieldValue.serverTimestamp() });
-        localStorage.setItem("systemVoteValue", random);
-      } else {
-        localStorage.setItem("systemVoteValue", systemDoc.data().value);
-      }
-
-      // 判斷是否可以顯示最終結果
-      const voterSnapshot = await db.collection("voters").get();
-      if (voterSnapshot.size >= 4) {
-        showFinalResult();
-      } else {
-        document.getElementById("result").innerHTML = `<p>📩 已收到 ${voterSnapshot.size} 票，尚需 ${4 - voterSnapshot.size} 票</p>`;
-      }
-    }
-
-    function showFinalResult() {
-      db.collection("votes").get().then(snapshot => {
-        let agree = 0, disagree = 0;
-        snapshot.forEach(doc => {
-          if (doc.id === "agree") agree = doc.data().count || 0;
-          if (doc.id === "disagree") disagree = doc.data().count || 0;
+      db.collection("votes").doc(option).get().then(doc => {
+        const count = doc.exists ? doc.data().count || 0 : 0;
+        db.collection("votes").doc(option).set({ count: count + 1 });
+        db.collection("voters").add({ timestamp: new Date() }).then(() => {
+          localStorage.setItem("hasVoted", "true");
+          document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
+          
+          // 檢查是否已達4票，並加入系統投票
+          db.collection("voters").get().then(snapshot => {
+            if (snapshot.size >= 4) {
+              // 系統隨機投票
+              db.collection("systemVote").doc("vote").get().then(sysDoc => {
+                if (!sysDoc.exists) {
+                  const rand = Math.random() < 0.5 ? "agree" : "disagree";
+                  db.collection("votes").doc(rand).get().then(v => {
+                    const sysCount = v.exists ? v.data().count || 0 : 0;
+                    db.collection("votes").doc(rand).set({ count: sysCount + 1 });
+                    db.collection("systemVote").doc("vote").set({ choice: rand });
+                    showFinalResult();
+                  });
+                } else {
+                  showFinalResult();
+                }
+              });
+            }
+          });
         });
-        const systemVote = localStorage.getItem("systemVoteValue") || "(未知)";
-        document.getElementById("result").innerHTML = `
-          <h2>📊 投票結果</h2>
-          <p>✅ 同意：${agree} 票</p>
-          <p>❌ 不同意：${disagree} 票</p>
-          <p>🧠 系統隨機投票：<strong>${systemVote === 'agree' ? '同意' : '不同意'}</strong></p>
-        `;
       });
     }
 
     function resetVotes() {
-      const pw = prompt("輸入密碼（預設 1234）：");
+      const pw = prompt("輸入密碼：");
       if (pw !== "1234") return alert("密碼錯誤");
 
       db.collection("votes").doc("agree").set({ count: 0 });
@@ -129,8 +111,7 @@
       clearCollection("voters");
       clearCollection("comments");
 
-      localStorage.removeItem("hasVoted");
-      localStorage.removeItem("systemVoteValue");
+      localStorage.clear(); // 清除本機記錄
 
       document.getElementById("message").innerText = "🔄 投票已重設，歡迎再投票！";
       document.getElementById("result").innerHTML = "";
@@ -144,7 +125,33 @@
       });
     }
 
-    // 顯示投票人數（即時）
+    function resetLocal() {
+      localStorage.removeItem("hasVoted");
+      localStorage.removeItem("systemVoteValue");
+      alert("✅ 已清除本裝置投票記錄，請重新整理頁面！");
+    }
+
+    function showFinalResult() {
+      let agree = 0, disagree = 0, systemVote = "";
+      db.collection("votes").get().then(snapshot => {
+        snapshot.forEach(doc => {
+          if (doc.id === "agree") agree = doc.data().count || 0;
+          if (doc.id === "disagree") disagree = doc.data().count || 0;
+        });
+        db.collection("systemVote").doc("vote").get().then(sysDoc => {
+          if (sysDoc.exists) {
+            systemVote = sysDoc.data().choice;
+          }
+          document.getElementById("result").innerHTML = `
+            <h3>📊 投票結果</h3>
+            <p>✅ 同意：${agree} 票</p>
+            <p>❌ 不同意：${disagree} 票</p>
+            <p>🧠 系統隨機投票為：<strong>${systemVote === "agree" ? "同意" : "不同意"}</strong></p>
+          `;
+        });
+      });
+    }
+
     db.collection("voters").onSnapshot(snapshot => {
       document.getElementById("voter-count").innerText = `👥 已投票人數：${snapshot.size}`;
     });
@@ -153,14 +160,10 @@
     function submitComment() {
       const text = document.getElementById("commentInput").value.trim();
       if (!text) return;
-      db.collection("comments").add({
-        text,
-        timestamp: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      db.collection("comments").add({ text, timestamp: new Date() });
       document.getElementById("commentInput").value = "";
     }
 
-    // 留言即時顯示
     db.collection("comments").orderBy("timestamp", "desc").onSnapshot(snapshot => {
       const div = document.getElementById("comments");
       div.innerHTML = "";
@@ -169,6 +172,18 @@
         div.innerHTML += `<div class="comment">📝 ${d.text}</div>`;
       });
     });
+
+    // 載入頁面時，自動顯示結果（若已投票且滿 4 人）
+    window.onload = async function () {
+      if (localStorage.getItem("hasVoted") === "true") {
+        const snapshot = await db.collection("voters").get();
+        if (snapshot.size >= 4) {
+          showFinalResult();
+        } else {
+          document.getElementById("result").innerHTML = `<p>📩 已收到 ${snapshot.size} 票，尚需 ${4 - snapshot.size} 票</p>`;
+        }
+      }
+    };
   </script>
 </body>
 </html>
