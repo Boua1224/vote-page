@@ -17,9 +17,20 @@
       margin: 10px;
       padding: 10px 20px;
     }
-    #result {
+    input, textarea {
+      padding: 10px;
+      width: 80%;
+      max-width: 400px;
+      margin-top: 10px;
+    }
+    #result, #voter-count, #comments {
       margin-top: 30px;
       font-size: 18px;
+    }
+    .comment {
+      border-bottom: 1px solid #ccc;
+      padding: 5px;
+      margin: 5px;
     }
   </style>
 </head>
@@ -32,7 +43,15 @@
   <button onclick="resetVotes()">🔄 重設投票</button>
 
   <div id="message"></div>
+  <div id="voter-count">👥 已投票人數：0 人</div>
   <div id="result"></div>
+
+  <hr />
+  <h2>💬 匿名留言</h2>
+  <textarea id="commentInput" rows="3" placeholder="輸入你的意見..."></textarea><br />
+  <button onclick="submitComment()">送出留言</button>
+
+  <div id="comments"></div>
 
   <script>
     const firebaseConfig = {
@@ -48,7 +67,6 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    // 投票功能
     function vote(option) {
       if (localStorage.getItem("hasVoted") === "true") {
         document.getElementById("message").innerText = "⚠️ 你已經投過票了！";
@@ -61,13 +79,17 @@
         const current = doc.exists ? doc.data().count || 0 : 0;
         transaction.set(docRef, { count: current + 1 });
       }).then(() => {
+        // 投票成功，記錄 voter
+        db.collection("voters").add({
+          timestamp: new Date()
+        });
         localStorage.setItem("hasVoted", "true");
         localStorage.setItem("myVote", option);
         document.getElementById("message").innerText = `✅ 你已投票：${option === 'agree' ? '同意' : '不同意'}`;
       });
     }
 
-    // 監聽投票變動
+    // 實時監聽投票數
     db.collection("votes").onSnapshot(snapshot => {
       let agree = 0;
       let disagree = 0;
@@ -84,7 +106,36 @@
       `;
     });
 
-    // 重設投票（主持人專用）
+    // 實時監聽已投票人數
+    db.collection("voters").onSnapshot(snapshot => {
+      document.getElementById("voter-count").innerText = `👥 已投票人數：${snapshot.size} 人`;
+    });
+
+    // 送出匿名留言
+    function submitComment() {
+      const comment = document.getElementById("commentInput").value.trim();
+      if (comment === "") return alert("請輸入留言");
+
+      db.collection("comments").add({
+        text: comment,
+        timestamp: new Date()
+      }).then(() => {
+        document.getElementById("commentInput").value = "";
+      });
+    }
+
+    // 顯示留言區
+    db.collection("comments").orderBy("timestamp", "desc").onSnapshot(snapshot => {
+      const commentsDiv = document.getElementById("comments");
+      commentsDiv.innerHTML = "";
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const time = data.timestamp?.toDate().toLocaleString() || "";
+        commentsDiv.innerHTML += `<div class="comment">📝 ${data.text} <br><small>${time}</small></div>`;
+      });
+    });
+
+    // 重設投票
     function resetVotes() {
       const password = prompt("輸入主持人密碼以重設投票：");
       if (password !== "1234") {
@@ -92,16 +143,26 @@
         return;
       }
 
-      const agreeRef = db.collection("votes").doc("agree");
-      const disagreeRef = db.collection("votes").doc("disagree");
+      // 歸零票數
+      db.collection("votes").doc("agree").set({ count: 0 });
+      db.collection("votes").doc("disagree").set({ count: 0 });
 
-      agreeRef.set({ count: 0 });
-      disagreeRef.set({ count: 0 });
+      // 刪除投票紀錄 & 留言
+      deleteCollection("voters");
+      deleteCollection("comments");
 
       localStorage.removeItem("hasVoted");
       localStorage.removeItem("myVote");
 
       document.getElementById("message").innerText = "🔄 投票已重設，歡迎再次投票！";
+    }
+
+    // 刪除整個集合內容
+    async function deleteCollection(name) {
+      const snapshot = await db.collection(name).get();
+      const batch = db.batch();
+      snapshot.forEach(doc => batch.delete(doc.ref));
+      return batch.commit();
     }
   </script>
 </body>
